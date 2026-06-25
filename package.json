@@ -1,0 +1,20 @@
+{
+  "name": "jairtimes",
+  "version": "1.0.0",
+  "description": "JAirtimes Daraja automation and Android USSD gateway broker",
+  "main": "server.js",
+  "engines": {
+    "node": "18.x"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "express": "^4.19.2",
+    "express-session": "^1.17.3",
+    "firebase-admin": "^12.0.0",
+    "socket.io": "^4.7.5"
+  }
+}
