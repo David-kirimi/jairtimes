@@ -210,6 +210,11 @@ async function fetchCustomers() {
     return loadCustomers();
 }
 
+let accountBalance = 0;
+let isAndroidOnline = false;
+let gatewaySocketId = null;
+let logHistory = loadLogs();
+
 async function persistLog(log) {
     logHistory.unshift(log);
     if (logHistory.length > 200) logHistory = logHistory.slice(0, 200);
@@ -223,11 +228,6 @@ async function persistLog(log) {
         }
     }
 }
-
-let accountBalance = 0;
-let isAndroidOnline = false;
-let gatewaySocketId = null;
-let logHistory = loadLogs();
 
 function emitSystemLog(logType, logMessage) {
     const freshLog = {
