@@ -229,12 +229,6 @@ let isAndroidOnline = false;
 let gatewaySocketId = null;
 let logHistory = loadLogs();
 
-function persistLog(log) {
-    logHistory.unshift(log);
-    if (logHistory.length > 200) logHistory = logHistory.slice(0, 200);
-    saveLogs(logHistory);
-}
-
 function emitSystemLog(logType, logMessage) {
     const freshLog = {
         id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11).toUpperCase(),
