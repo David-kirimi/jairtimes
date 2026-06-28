@@ -33,7 +33,6 @@ let firestore = null;
 const DATA_DIR = path.join(__dirname, 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const CUSTOMERS_FILE = path.join(DATA_DIR, 'customers.json');
-const LOG_FILE = path.join(DATA_DIR, 'logs.json');
 
 function ensureDataDirectory() {
     if (!fs.existsSync(DATA_DIR)) {
@@ -171,13 +170,7 @@ function saveCustomers(customers) {
     saveJson(CUSTOMERS_FILE, customers);
 }
 
-function loadLogs() {
-    return loadJson(LOG_FILE, []);
-}
 
-function saveLogs(logs) {
-    saveJson(LOG_FILE, logs.slice(0, 200));
-}
 
 async function persistCustomer(customer) {
     const customers = loadCustomers();
@@ -213,31 +206,64 @@ async function fetchCustomers() {
 let accountBalance = 0;
 let isAndroidOnline = false;
 let gatewaySocketId = null;
-let logHistory = loadLogs();
-
-async function persistLog(log) {
-    logHistory.unshift(log);
-    if (logHistory.length > 200) logHistory = logHistory.slice(0, 200);
-    saveLogs(logHistory);
-
-    if (firestore) {
-        try {
-            await firestore.collection('logs').doc(log.id).set(log);
-        } catch (err) {
-            console.error('Firebase log save failed:', err);
-        }
-    }
-}
 
 function emitSystemLog(logType, logMessage) {
-    const freshLog = {
+    const systemLog = {
         id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11).toUpperCase(),
         time: new Date().toISOString(),
         type: logType,
         message: logMessage
     };
-    persistLog(freshLog);
-    io.emit('new_system_log', freshLog);
+    io.emit('new_system_log', systemLog);
+}
+
+// Store transaction reports in Firebase
+async function storeTransaction(transactionData) {
+    if (firestore) {
+        try {
+            const transactionId = transactionData.id || crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11).toUpperCase();
+            await firestore.collection('transactions').doc(transactionId).set({
+                ...transactionData,
+                timestamp: new Date().toISOString(),
+                recordedAt: new Date()
+            });
+        } catch (err) {
+            console.error('Failed to store transaction:', err);
+        }
+    }
+}
+
+// Update performance metrics in Firebase
+async function updatePerformanceMetrics() {
+    if (firestore) {
+        try {
+            await firestore.collection('performance').doc('daily_metrics').set({
+                totalTransactions: totalTransactions,
+                commissionEarned: commissionEarned,
+                profitsGenerated: profitsGenerated,
+                lastUpdated: new Date()
+            }, { merge: true });
+        } catch (err) {
+            console.error('Failed to update performance metrics:', err);
+        }
+    }
+}
+
+// Store partner payout records in Firebase
+async function storePartnerPayout(msisdn, payoutAmount) {
+    if (firestore) {
+        try {
+            const payoutId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11).toUpperCase();
+            await firestore.collection('payouts').doc(payoutId).set({
+                partner: msisdn,
+                amount: payoutAmount,
+                status: 'completed',
+                timestamp: new Date()
+            });
+        } catch (err) {
+            console.error('Failed to store partner payout:', err);
+        }
+    }
 }
 
 // --- PRODUCTION DARAJA CREDENTIAL CONFIGURATION ---
@@ -280,13 +306,11 @@ io.on('connection', (socket) => {
         gatewaySocketId = socket.id;
         io.emit('gateway_status_update', true);
         socket.emit('balance_snapshot', accountBalance);
-        socket.emit('populate_initial_logs', logHistory);
         socket.emit('metrics_update', { commission: commissionEarned.toFixed(2), profits: profitsGenerated.toFixed(2), transactions: totalTransactions });
         emitSystemLog("GATEWAY", "Android physical gateway device connected and online.");
     } else {
         socket.emit('gateway_status_update', isAndroidOnline);
         socket.emit('balance_snapshot', accountBalance);
-        socket.emit('populate_initial_logs', logHistory);
         socket.emit('metrics_update', { commission: commissionEarned.toFixed(2), profits: profitsGenerated.toFixed(2), transactions: totalTransactions });
     }
 
@@ -397,6 +421,9 @@ app.post('/api/admin/payout', requireAdmin, async (req, res) => {
             status: 'completed'
         });
 
+        // Store payout record in Firebase
+        storePartnerPayout(msisdn, payoutAmount);
+
         if (appConfig.talksasaApiKey && appConfig.talksasaUrl) {
             await axios.post(appConfig.talksasaUrl, {
                 apikey: appConfig.talksasaApiKey,
@@ -465,12 +492,37 @@ app.post('/api/mpesa/confirmation', (req, res) => {
             partnerCommissions[partnerPhone].pending += bundleCommission;
             partnerCommissions[partnerPhone].sales += 1;
             emitSystemLog("TRANSACTION", `Bundle Ksh ${amountPaid} sold via partner ${partnerPhone}. Commission: Ksh ${bundleCommission.toFixed(2)}`);
+            storeTransaction({
+                type: 'bundle_sale',
+                amount: amountPaid,
+                bundleCode: matchedBundle.code,
+                commission: bundleCommission,
+                partnerPhone: partnerPhone,
+                customerNumber: customerNumber,
+                mpesaReceipt: mpesaReceipt
+            });
         } else {
             emitSystemLog("TRANSACTION", `Bundle Ksh ${amountPaid} confirmed from ${customerNumber}. Commission: Ksh ${bundleCommission.toFixed(2)}. ID: ${mpesaReceipt}`);
+            storeTransaction({
+                type: 'bundle_purchase',
+                amount: amountPaid,
+                bundleCode: matchedBundle.code,
+                commission: bundleCommission,
+                customerNumber: customerNumber,
+                mpesaReceipt: mpesaReceipt
+            });
         }
     } else {
         emitSystemLog("TRANSACTION", `Payment Ksh ${amountPaid} from ${customerNumber}. ID: ${mpesaReceipt}`);
+        storeTransaction({
+            type: 'payment',
+            amount: amountPaid,
+            customerNumber: customerNumber,
+            mpesaReceipt: mpesaReceipt
+        });
     }
+    
+    updatePerformanceMetrics();
     
     io.emit('metrics_update', { 
         commission: commissionEarned.toFixed(2), 
